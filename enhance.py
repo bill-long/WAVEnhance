@@ -67,16 +67,25 @@ def _enhance_mono(model, mono_path: str, args) -> "np.ndarray":
     try:
         data, sr = sf.read(mono_path, dtype="float32")
         total_samples = len(data)
-        # Process in ~10-second chunks (aligned to 5.12s for model compatibility)
-        chunk_seconds = 10.24
+        chunk_seconds = args.chunk_seconds
+        overlap_seconds = args.overlap
         chunk_samples = int(chunk_seconds * sr)
+        overlap_samples = int(overlap_seconds * sr)
+        # Stride is how far we advance between chunks
+        stride_samples = chunk_samples - overlap_samples
         enhanced_chunks = []
 
-        num_chunks = max(1, (total_samples + chunk_samples - 1) // chunk_samples)
+        num_chunks = max(1, 1 + (total_samples - chunk_samples + stride_samples - 1) // stride_samples)
+        if total_samples <= chunk_samples:
+            num_chunks = 1
+
+        # Output sample rate is 48 kHz
+        out_sr = 48000
+        overlap_out = int(overlap_seconds * out_sr)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             for ci in range(num_chunks):
-                start = ci * chunk_samples
+                start = ci * stride_samples
                 end = min(start + chunk_samples, total_samples)
                 chunk_data = data[start:end]
 
@@ -98,8 +107,8 @@ def _enhance_mono(model, mono_path: str, args) -> "np.ndarray":
                     waveform = waveform.cpu().numpy()
                 waveform = waveform.squeeze()
 
-                # Trim to match original chunk duration at 48kHz output rate
-                expected_samples = int((end - start) / sr * 48000)
+                # Trim to match original chunk duration at output rate
+                expected_samples = int((end - start) / sr * out_sr)
                 waveform = waveform[:expected_samples]
 
                 enhanced_chunks.append(waveform)
@@ -107,7 +116,42 @@ def _enhance_mono(model, mono_path: str, args) -> "np.ndarray":
                 if num_chunks > 1:
                     log_progress(0, f"  Chunk {ci + 1}/{num_chunks} done")
 
-        result = np.concatenate(enhanced_chunks)
+        # Merge chunks with linear crossfade in overlap regions
+        if len(enhanced_chunks) == 1:
+            result = enhanced_chunks[0]
+        else:
+            stride_out = int((stride_samples / sr) * out_sr)
+            total_out = stride_out * (len(enhanced_chunks) - 1) + len(enhanced_chunks[-1])
+            result = np.zeros(total_out, dtype=np.float32)
+            weights = np.zeros(total_out, dtype=np.float32)
+
+            for ci, chunk in enumerate(enhanced_chunks):
+                offset = ci * stride_out
+                chunk_len = len(chunk)
+                fade = np.ones(chunk_len, dtype=np.float32)
+
+                if ci > 0 and overlap_out > 0:
+                    # Fade in at the start of this chunk
+                    ramp_len = min(overlap_out, chunk_len)
+                    fade[:ramp_len] = np.linspace(0.0, 1.0, ramp_len)
+
+                if ci < len(enhanced_chunks) - 1 and overlap_out > 0:
+                    # Fade out at the end of this chunk
+                    ramp_len = min(overlap_out, chunk_len)
+                    fade[-ramp_len:] = np.linspace(1.0, 0.0, ramp_len)
+
+                end_idx = offset + chunk_len
+                if end_idx > len(result):
+                    chunk_len = len(result) - offset
+                    chunk = chunk[:chunk_len]
+                    fade = fade[:chunk_len]
+
+                result[offset:offset + chunk_len] += chunk * fade
+                weights[offset:offset + chunk_len] += fade
+
+            # Normalize by weights to complete the crossfade
+            mask = weights > 0
+            result[mask] /= weights[mask]
     finally:
         ddim_mod.make_ddim_timesteps = _orig_make_ddim_timesteps
 
@@ -127,6 +171,10 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument("--device", type=str, default="auto",
                         help="Device: auto, cpu, cuda, or directml (default: auto)")
+    parser.add_argument("--chunk-seconds", type=float, default=10.24,
+                        help="Chunk length in seconds (default: 10.24)")
+    parser.add_argument("--overlap", type=float, default=1.0,
+                        help="Crossfade overlap in seconds (default: 1.0)")
     args = parser.parse_args()
 
     if args.steps < 5:

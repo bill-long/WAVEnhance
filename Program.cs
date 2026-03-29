@@ -146,7 +146,9 @@ class Program
                 "--guidance", options.Guidance.ToString(),
                 "--steps", options.Steps.ToString(),
                 "--seed", options.Seed.ToString(),
-                "--device", options.Device
+                "--device", options.Device,
+                "--chunk-seconds", options.ChunkSeconds.ToString(),
+                "--overlap", options.Overlap.ToString()
             },
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -284,6 +286,12 @@ class Program
                 case "--device" or "-d":
                     options.Device = args[++i];
                     break;
+                case "--chunk-seconds":
+                    options.ChunkSeconds = double.Parse(args[++i]);
+                    break;
+                case "--overlap":
+                    options.Overlap = double.Parse(args[++i]);
+                    break;
                 case "--help" or "-h":
                     PrintUsage();
                     return null;
@@ -328,6 +336,8 @@ class Program
           --steps            AudioSR DDIM steps (default: 50)
           --seed             Random seed for reproducibility (default: 42)
           --device, -d       Compute device: auto, cpu, cuda, directml (default: auto)
+          --chunk-seconds    Audio chunk length in seconds (default: 10.24)
+          --overlap          Crossfade overlap in seconds between chunks (default: 1.0)
           --help, -h         Show this help message
         """);
     }
@@ -342,4 +352,6 @@ class Options
     public int Steps { get; set; } = 50;
     public int Seed { get; set; } = 42;
     public string Device { get; set; } = "auto";
+    public double ChunkSeconds { get; set; } = 10.24;
+    public double Overlap { get; set; } = 1.0;
 }

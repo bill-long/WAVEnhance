@@ -5,8 +5,18 @@ namespace WAVEnhance;
 
 class Program
 {
+    static readonly CancellationTokenSource _cts = new();
+    static Process? _activeProcess;
+
     static async Task<int> Main(string[] args)
     {
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            _cts.Cancel();
+            KillActiveProcess();
+        };
+
         var options = ParseArgs(args);
         if (options is null) return 1;
 
@@ -35,6 +45,12 @@ class Program
 
         for (int i = 0; i < wavFiles.Count; i++)
         {
+            if (_cts.IsCancellationRequested)
+            {
+                Console.WriteLine("\nCancelled by user.");
+                break;
+            }
+
             var inputPath = wavFiles[i];
             var fileName = Path.GetFileName(inputPath);
             var outputPath = Path.Combine(options.Output, fileName);
@@ -164,6 +180,8 @@ class Program
             return false;
         }
 
+        _activeProcess = process;
+
         // Read stdout for progress
         string? lastError = null;
         bool success = false;
@@ -205,8 +223,15 @@ class Program
             }
         });
 
-        await process.WaitForExitAsync();
+        await process.WaitForExitAsync(_cts.Token).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         await Task.WhenAll(stdoutTask, stderrTask);
+        _activeProcess = null;
+
+        if (_cts.IsCancellationRequested)
+        {
+            KillActiveProcess(process);
+            return false;
+        }
 
         if (!success || process.ExitCode != 0)
         {
@@ -217,8 +242,21 @@ class Program
         return true;
     }
 
+    static void KillActiveProcess(Process? process = null)
+    {
+        process ??= _activeProcess;
+        if (process is null || process.HasExited) return;
+        try
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(3000);
+        }
+        catch { /* already exited */ }
+    }
+
     static string? FindVenvPython()
     {
+
         string[] searchRoots =
         [
             Path.GetDirectoryName(Environment.ProcessPath ?? ".") ?? ".",

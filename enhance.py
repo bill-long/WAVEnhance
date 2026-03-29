@@ -49,7 +49,10 @@ def _enhance_mono(model, mono_path: str, args) -> "np.ndarray":
     """Run AudioSR on a mono WAV file and return the enhanced waveform as numpy array."""
     import torch
     import numpy as np
-    from audio_upscaler.pipeline import super_resolution
+    import soundfile as sf
+    import tempfile
+    import os
+    from audio_upscaler.pipeline import make_batch_for_super_resolution, seed_everything
 
     # Monkey-patch to fix off-by-one bug in DDIM timestep generation:
     # range(0, 1000, 333) produces [0,333,666,999], and +1 gives 1000 which is OOB.
@@ -62,26 +65,57 @@ def _enhance_mono(model, mono_path: str, args) -> "np.ndarray":
 
     ddim_mod.make_ddim_timesteps = _patched_make_ddim_timesteps
     try:
-        waveform = super_resolution(
-            model,
-            mono_path,
-            seed=args.seed,
-            guidance_scale=args.guidance,
-            ddim_steps=args.steps,
-        )
+        data, sr = sf.read(mono_path, dtype="float32")
+        total_samples = len(data)
+        # Process in ~10-second chunks (aligned to 5.12s for model compatibility)
+        chunk_seconds = 10.24
+        chunk_samples = int(chunk_seconds * sr)
+        enhanced_chunks = []
+
+        num_chunks = max(1, (total_samples + chunk_samples - 1) // chunk_samples)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for ci in range(num_chunks):
+                start = ci * chunk_samples
+                end = min(start + chunk_samples, total_samples)
+                chunk_data = data[start:end]
+
+                chunk_path = os.path.join(tmpdir, f"chunk_{ci}.wav")
+                sf.write(chunk_path, chunk_data, sr, subtype="PCM_16")
+
+                seed_everything(int(args.seed))
+                batch, duration = make_batch_for_super_resolution(chunk_path, waveform=None)
+
+                with torch.no_grad():
+                    waveform = model.generate_batch(
+                        batch,
+                        unconditional_guidance_scale=args.guidance,
+                        ddim_steps=args.steps,
+                        duration=duration,
+                    )
+
+                if torch.is_tensor(waveform):
+                    waveform = waveform.cpu().numpy()
+                waveform = waveform.squeeze()
+
+                # Trim to match original chunk duration at 48kHz output rate
+                expected_samples = int((end - start) / sr * 48000)
+                waveform = waveform[:expected_samples]
+
+                enhanced_chunks.append(waveform)
+
+                if num_chunks > 1:
+                    log_progress(0, f"  Chunk {ci + 1}/{num_chunks} done")
+
+        result = np.concatenate(enhanced_chunks)
     finally:
         ddim_mod.make_ddim_timesteps = _orig_make_ddim_timesteps
 
-    if torch.is_tensor(waveform):
-        waveform = waveform.cpu().numpy()
-
-    waveform = waveform.squeeze()
-
     # Replace any NaN/Inf with 0 (can occur with very few DDIM steps)
-    if not np.all(np.isfinite(waveform)):
-        waveform = np.nan_to_num(waveform, nan=0.0, posinf=1.0, neginf=-1.0)
+    if not np.all(np.isfinite(result)):
+        result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
 
-    return waveform
+    return result
 
 
 def main():
@@ -107,14 +141,31 @@ def main():
     try:
         log_progress(5, "Loading AudioSR model...")
         import torch
+        import torchaudio
         import numpy as np
         import soundfile as sf
         from audio_upscaler.pipeline import build_model
 
+        # torchaudio 2.11+ defaults to torchcodec which may not load.
+        # Patch torchaudio.load to use soundfile instead.
+        _orig_torchaudio_load = torchaudio.load
+        def _soundfile_load(filepath, *args, **kwargs):
+            data, sample_rate = sf.read(filepath, dtype="float32")
+            waveform = torch.from_numpy(data)
+            if waveform.ndim == 1:
+                waveform = waveform.unsqueeze(0)
+            else:
+                waveform = waveform.T  # (samples, channels) -> (channels, samples)
+            return waveform, sample_rate
+        torchaudio.load = _soundfile_load
+
         device = _detect_device(args.device)
         log_progress(10, f"Using device: {device}")
 
-        audiosr_model = build_model(model_name="basic", device=device)
+        # Load model on CPU first to avoid OOM, then move to target device
+        audiosr_model = build_model(model_name="basic", device="cpu")
+        audiosr_model = audiosr_model.to(device)
+        audiosr_model.device = device
         log_progress(25, "Model loaded")
 
         # Read input to determine channel count

@@ -153,6 +153,7 @@ class Program
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        psi.Environment["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True";
 
         using var process = Process.Start(psi);
         if (process is null)
@@ -188,9 +189,18 @@ class Program
 
         var stderrTask = Task.Run(() =>
         {
-            var stderr = process.StandardError.ReadToEnd();
-            if (!string.IsNullOrWhiteSpace(stderr))
-                lastError = stderr;
+            while (process.StandardError.ReadLine() is { } line)
+            {
+                // Ignore Python warnings — only capture actual errors
+                if (line.Contains("Warning:", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("FutureWarning", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("UserWarning", StringComparison.OrdinalIgnoreCase) ||
+                    line.TrimStart().StartsWith("warnings.warn("))
+                    continue;
+
+                if (!string.IsNullOrWhiteSpace(line))
+                    lastError = line;
+            }
         });
 
         await process.WaitForExitAsync();
@@ -207,18 +217,26 @@ class Program
 
     static string? FindVenvPython()
     {
-        // Search relative to the executable, then current directory
         string[] searchRoots =
         [
             Path.GetDirectoryName(Environment.ProcessPath ?? ".") ?? ".",
             Directory.GetCurrentDirectory(),
         ];
 
+        bool isWindows = OperatingSystem.IsWindows();
+        string[] venvDirs = [".venv", "venv"];
+
         foreach (var root in searchRoots)
         {
-            var venvPython = Path.Combine(root, ".venv", "Scripts", "python.exe");
-            if (File.Exists(venvPython))
-                return venvPython;
+            foreach (var venv in venvDirs)
+            {
+                var candidate = isWindows
+                    ? Path.Combine(root, venv, "Scripts", "python.exe")
+                    : Path.Combine(root, venv, "bin", "python");
+
+                if (File.Exists(candidate))
+                    return candidate;
+            }
         }
 
         return null;

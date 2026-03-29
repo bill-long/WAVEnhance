@@ -38,9 +38,6 @@ def _detect_device(preference: str) -> str:
 
     # torch.cuda covers both NVIDIA CUDA and AMD ROCm (HIP)
     if torch.cuda.is_available():
-        hip = getattr(torch.version, "hip", None)
-        if hip:
-            print(f"INFO: Using ROCm/HIP {hip} — {torch.cuda.get_device_name(0)}", flush=True)
         return "cuda"
 
     if preference == "directml":
@@ -51,6 +48,20 @@ def _detect_device(preference: str) -> str:
             print("WARNING: torch-directml not installed. Falling back to CPU.", flush=True)
 
     return "cpu"
+
+
+def _device_label(device: str) -> str:
+    """Return a human-friendly label for the active device."""
+    import torch
+
+    if device != "cuda":
+        return device
+
+    name = torch.cuda.get_device_name(0)
+    hip = getattr(torch.version, "hip", None)
+    if hip:
+        return f"ROCm/HIP {hip} — {name}"
+    return f"CUDA {torch.version.cuda} — {name}"
 
 
 def _enhance_mono(model, mono_path: str, args) -> "np.ndarray":
@@ -221,7 +232,7 @@ def main():
         torchaudio.load = _soundfile_load
 
         device = _detect_device(args.device)
-        log_progress(10, f"Using device: {device}")
+        log_progress(10, f"Using device: {_device_label(device)}")
 
         # Load model on CPU first to avoid OOM, then move to target device
         audiosr_model = build_model(model_name="basic", device="cpu")

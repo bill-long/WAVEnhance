@@ -26,13 +26,21 @@ def log_result(success: bool, message: str):
 
 
 def _detect_device(preference: str) -> str:
-    """Detect the best available compute device."""
+    """Detect the best available compute device.
+
+    torch.cuda.is_available() returns True for both NVIDIA CUDA and AMD ROCm,
+    so a single 'cuda' check covers both GPU backends.
+    """
     import torch
 
     if preference == "cpu":
         return "cpu"
 
+    # torch.cuda covers both NVIDIA CUDA and AMD ROCm (HIP)
     if torch.cuda.is_available():
+        hip = getattr(torch.version, "hip", None)
+        if hip:
+            print(f"INFO: Using ROCm/HIP {hip} — {torch.cuda.get_device_name(0)}", flush=True)
         return "cuda"
 
     if preference == "directml":

@@ -1,0 +1,6 @@
+.venv/
+bin/
+obj/
+test_output/
+*.user
+__pycache__/

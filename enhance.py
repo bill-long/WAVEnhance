@@ -111,6 +111,11 @@ def _enhance_mono(model, mono_path: str, args) -> "np.ndarray":
                 expected_samples = int((end - start) / sr * out_sr)
                 waveform = waveform[:expected_samples]
 
+                # Normalize output RMS to match input RMS (prevents per-chunk gain drift)
+                input_rms = np.sqrt(np.mean(chunk_data ** 2)) + 1e-10
+                output_rms = np.sqrt(np.mean(waveform ** 2)) + 1e-10
+                waveform = waveform * (input_rms / output_rms)
+
                 enhanced_chunks.append(waveform)
 
                 if num_chunks > 1:

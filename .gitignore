@@ -5,3 +5,5 @@ test_output/
 *.user
 __pycache__/
 pytorch_model.bin
+ModelWeights/
+.flashsr/

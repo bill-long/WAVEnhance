@@ -29,13 +29,11 @@ class Program
 
         Directory.CreateDirectory(options.Output);
 
-        Console.WriteLine($"WAVEnhance — AI Audio Super-Resolution");
+        Console.WriteLine($"WAVEnhance — AI Audio Super-Resolution (FlashSR)");
         Console.WriteLine($"  Input:       {options.Input}");
         Console.WriteLine($"  Output:      {options.Output}");
         Console.WriteLine($"  Sample Rate: {options.SampleRate} Hz");
         Console.WriteLine($"  Files:       {wavFiles.Count}");
-        Console.WriteLine($"  Guidance:    {options.Guidance}");
-        Console.WriteLine($"  Steps:       {options.Steps}");
         Console.WriteLine($"  Seed:        {options.Seed}");
         Console.WriteLine($"  Device:      {options.Device}");
         Console.WriteLine();
@@ -65,12 +63,12 @@ class Program
                 continue;
             }
 
-            // Run AudioSR via Python
+            // Run FlashSR via Python
             var enhancedPath = options.SampleRate == 48000
                 ? outputPath
                 : Path.Combine(options.Output, $"_temp_{fileName}");
 
-            bool success = await RunAudioSR(inputPath, enhancedPath, options);
+            bool success = await RunFlashSR(inputPath, enhancedPath, options);
             if (!success)
             {
                 failed++;
@@ -134,7 +132,7 @@ class Program
         }
     }
 
-    static async Task<bool> RunAudioSR(string inputPath, string outputPath, Options options)
+    static async Task<bool> RunFlashSR(string inputPath, string outputPath, Options options)
     {
         // Find Python in the .venv
         var venvPython = FindVenvPython();
@@ -159,12 +157,8 @@ class Program
                 scriptPath,
                 "--input", inputPath,
                 "--output", outputPath,
-                "--guidance", options.Guidance.ToString(),
-                "--steps", options.Steps.ToString(),
                 "--seed", options.Seed.ToString(),
                 "--device", options.Device,
-                "--chunk-seconds", options.ChunkSeconds.ToString(),
-                "--overlap", options.Overlap.ToString()
             },
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -235,7 +229,7 @@ class Program
 
         if (!success || process.ExitCode != 0)
         {
-            Console.Error.WriteLine($"  ✗ AudioSR failed: {lastError ?? "unknown error"}");
+            Console.Error.WriteLine($"  ✗ FlashSR failed: {lastError ?? "unknown error"}");
             return false;
         }
 
@@ -312,23 +306,11 @@ class Program
                 case "--sample-rate" or "-s":
                     options.SampleRate = int.Parse(args[++i]);
                     break;
-                case "--guidance":
-                    options.Guidance = double.Parse(args[++i]);
-                    break;
-                case "--steps":
-                    options.Steps = int.Parse(args[++i]);
-                    break;
                 case "--seed":
                     options.Seed = int.Parse(args[++i]);
                     break;
                 case "--device" or "-d":
                     options.Device = args[++i];
-                    break;
-                case "--chunk-seconds":
-                    options.ChunkSeconds = double.Parse(args[++i]);
-                    break;
-                case "--overlap":
-                    options.Overlap = double.Parse(args[++i]);
                     break;
                 case "--help" or "-h":
                     PrintUsage();
@@ -362,7 +344,7 @@ class Program
         
         Usage: WAVEnhance --input <path> --output <path> [options]
 
-        AI-powered audio super-resolution using AudioSR.
+        AI-powered audio super-resolution using FlashSR.
         Restores lost high-frequency content in WAV files that were
         transcoded from lossy sources (MP3/AAC).
 
@@ -370,12 +352,8 @@ class Program
           --input, -i        Input WAV file or directory (required)
           --output, -o       Output directory (required)
           --sample-rate, -s  Target sample rate: 48000 or 96000 (default: 48000)
-          --guidance         AudioSR guidance scale (default: 3.5)
-          --steps            AudioSR DDIM steps (default: 50)
           --seed             Random seed for reproducibility (default: 42)
-          --device, -d       Compute device: auto, cpu, cuda, directml (default: auto)
-          --chunk-seconds    Audio chunk length in seconds (default: 10.24)
-          --overlap          Crossfade overlap in seconds between chunks (default: 1.0)
+          --device, -d       Compute device: auto, cpu, cuda (default: auto)
           --help, -h         Show this help message
         """);
     }
@@ -386,10 +364,6 @@ class Options
     public string Input { get; set; } = "";
     public string Output { get; set; } = "";
     public int SampleRate { get; set; } = 48000;
-    public double Guidance { get; set; } = 3.5;
-    public int Steps { get; set; } = 50;
     public int Seed { get; set; } = 42;
     public string Device { get; set; } = "auto";
-    public double ChunkSeconds { get; set; } = 10.24;
-    public double Overlap { get; set; } = 1.0;
 }
